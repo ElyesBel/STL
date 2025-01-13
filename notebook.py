@@ -31,7 +31,7 @@ def __(mo, show):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(mo):
     with open("data/teapot.stl", mode="rt", encoding="utf-8") as _file:
         teapot_stl = _file.read()
@@ -57,7 +57,7 @@ def __(mo):
     return teapot_stl, teapot_stl_excerpt
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(f"""
 
@@ -72,12 +72,18 @@ def __(mo):
 
 
 @app.cell
+def __(mo, show):
+    mo.show_code(show("data/cube.stl"))
+    return
+
+
+@app.cell
 def __(mo):
     mo.md(r"""## STL & NumPy""")
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(rf"""
 
@@ -147,6 +153,45 @@ def __(mo):
 
 
 @app.cell
+def __(np):
+    def make_STL(triangles, normals=None, name=""):
+        lines = []
+        lines.append(f"solid {name}") #initialisation de la chaîne de caractères
+
+        if normals is None: #calcul des normales si non spécifié, comme produit vectoriel normalisé
+            vect1 = triangles[:, 1] - triangles[:, 0] #vecteur associé à un côté de chaque triangle
+            vect2 = triangles[:, 2] - triangles[:, 0] #vecteur associé à un autre côté de chaque triangle
+            normals = np.cross(vect1, vect2) #produit vectoriel des 2 vecteurs-côté
+            norme = np.linalg.norm(normals, axis=1, keepdims=True) #calcul de la norme
+            normals = normals/norme #normalisation (aucun vecteur n'est nul a priori, pas besoin de faire attention à ne pas diviser par 0)
+        for normal, tri in zip(normals, triangles): #emploi de zip pour faire la boucle for en simultané sur normals et triangles
+            lines.append(f"  facet normal {normal[0]} {normal[1]} {normal[2]}")
+            lines.append("    outer loop")
+            for vertex in tri:
+                lines.append(f"      vertex {vertex[0]} {vertex[1]} {vertex[2]}")
+            lines.append("    endloop")
+            lines.append("  endfacet")
+        lines.append(f"endsolid {name}")
+
+        return "\n".join(lines) #ensemble des lignes jointes avec saut de ligne à chaque ligne
+    return (make_STL,)
+
+
+@app.cell
+def __(make_STL, np):
+    square_triangles = np.array(
+        [
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            [[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+        ],
+        dtype=np.float32,
+    )
+
+    make_STL(square_triangles, name="square")
+    return (square_triangles,)
+
+
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(
         """
@@ -193,6 +238,33 @@ def __(mo):
 
 
 @app.cell
+def __(np):
+    def tokenize(stl):
+        tokens = []
+        lines = stl.splitlines()
+        for line in lines:
+            elements = line.split()
+            tokens.append(elements[0])
+            if len(elements) > 1 and elements[1] == 'normal':
+                tokens.append(elements[1])
+                coord = [np.float32(x) for x in elements[2:]]
+                tokens += coord
+                continue
+            if elements[0] == 'vertex':
+                coord = [np.float32(x) for x in elements[1:]]
+                tokens += coord
+                continue
+            tokens += elements[1:]
+        return tokens
+
+    with open("data/square.stl", mode="rt", encoding="us-ascii") as square_file:
+        square_stl = square_file.read()
+    tokens = tokenize(square_stl)
+    tokens
+    return square_file, square_stl, tokenize, tokens
+
+
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(
         """
@@ -256,6 +328,47 @@ def __(mo):
 
 
 @app.cell
+def __(np, tokens):
+    def parse(tokens):
+        triangles = []
+        normals = []
+        name = ""
+        i = 0 #compteur de mots
+        while i < len(tokens): #boucle while plutôt que boucle for-python pour pouvoir sauter plusieurs indices d'un coup
+            token = tokens[i] #on récupère le mot dans la liste
+            if token == 'solid':
+                i += 1
+                while i < len(tokens) and tokens[i] != 'facet': #ajout du nom
+                    name += tokens[i] + " "
+                    i += 1
+                name = name.strip() #on enlève les espaces inutiles
+            elif token == 'facet' and tokens[i+1] == 'normal':
+                normals.append([float(tokens[i+2]), float(tokens[i+3]), float(tokens[i+4])])
+                i += 5        
+            elif token == 'vertex':
+                triangle = []
+                for _ in range(3): #pas besoin de nom de variable de boucle
+                    if tokens[i] == 'vertex':
+                        triangle.append([float(tokens[i+1]), float(tokens[i+2]), float(tokens[i+3])])
+                        i += 4
+                triangles.append(triangle)
+            elif token == 'endsolid': #fin de la description STL du solide
+                break
+            else:
+                i += 1
+        #conversion en tableaux numpy des listes triangles et normals
+        triangles = np.array(triangles, dtype=np.float32)
+        normals = np.array(normals, dtype=np.float32)
+        return triangles, normals, name
+
+    triangles, normals, name = parse(tokens)
+    print(repr(triangles))
+    print(repr(normals))
+    print(repr(name))
+    return name, normals, parse, triangles
+
+
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(
         rf"""
@@ -290,6 +403,220 @@ def __(mo):
 
 
 @app.cell
+def __(np):
+    def pos_octant_rule(triangles):
+        vertices = triangles.size #nombre de sommets
+        negative_vertices = np.sum(triangles < 0) #nombre de sommets négatifs
+        percentage_neg = (negative_vertices/vertices)*100
+        return {'rule': 'positive octant rule', 'number of violations': negative_vertices, 'percentage of violation': percentage_neg, 'rule satisfied': negative_vertices == 0}
+    return (pos_octant_rule,)
+
+
+@app.cell
+def __(np):
+    def orientation_rule(triangles, normals):
+        #1ère vérification : normales = vecteurs unitaires ?
+        norms = np.linalg.norm(normals, axis=1)
+        pas_unitaires = np.sum(np.abs(norms - 1) > 1e-4) #nombre de normales non unitaires
+
+        #2ème vérification : règle de la main droite ?
+        vect1 = triangles[:, 1] - triangles[:, 0]
+        vect2 = triangles[:, 2] - triangles[:, 0]
+        prod_vect = np.cross(vect1, vect2)
+        prod_vect /= np.linalg.norm(prod_vect, axis=1, keepdims=True)  #normalisation
+        pas_rmd = np.sum(np.dot(prod_vect, normals.T).diagonal() < 0) #le nombre de normales ne suivant pas la règle de la main droite s'obtient par produit scalaire
+
+        #pourcentage de violations
+        total_triangles = triangles.shape[0]
+        violation_percentage = ((pas_unitaires + pas_rmd) / total_triangles) * 100
+
+        return {'rule': 'orientation rule', 'number of unitary violations': pas_unitaires, 'number of orientation violations': pas_rmd, 'percentage of violation': violation_percentage, 'rule satisfied': pas_unitaires == 0 and pas_rmd == 0}
+    return (orientation_rule,)
+
+
+@app.cell
+def __():
+    def shared_edge_rule(triangles):
+        edges = []
+        for triangle in triangles: #ajout des arêtes ordonnées (pour pouvoir les compter)
+            edges.extend([(tuple(triangle[0]), tuple(triangle[1])), (tuple(triangle[1]), tuple(triangle[2])), (tuple(triangle[2]), tuple(triangle[0]))])
+        sorted_edges = [tuple(sorted(edge)) for edge in edges] #on trie les arêtes pour éviter les doublons
+
+        #occurrences des arêtes
+        count_edges = {}
+        for edge in sorted_edges:
+            count_edges[edge] = count_edges.get(edge, 0) + 1 #on ajoute 1 au compte
+
+        nb_edges = len(count_edges)
+        violations = sum(1 for count in count_edges.values() if count != 2)
+        violation_percentage = (violations / nb_edges) * 100
+
+        return {'rule': 'shared edge rule', 'number of edges': nb_edges, 'number of violations': violations, 'percentage of violation': violation_percentage, 'satisfied': violations == 0}
+    return (shared_edge_rule,)
+
+
+@app.cell
+def __(np):
+    def ascending_rule(triangles):
+        barycenters = np.mean(triangles, axis=1) #barycentres
+        z_coord = barycenters[:, 2] #coordonnées selon z des barycentres
+        violations = np.sum(np.diff(z_coord) < 0)
+        violation_percentage = (violations/len(z_coord))*100
+
+        return {'rule': 'ascending rule', 'number of triangles': len(barycenters), 'violations': violations, 'percentage of violations': violation_percentage, 'satisfied': violations == 0}
+    return (ascending_rule,)
+
+
+@app.cell
+def __(parse, tokenize):
+    with open("data/teapot.stl", mode="rt", encoding="us-ascii") as tea_file:
+        tea_stl = tea_file.read()
+    tokens_tea = tokenize(tea_stl)
+    triangles_tea, normals_tea, name_tea = parse(tokens_tea)
+    return (
+        name_tea,
+        normals_tea,
+        tea_file,
+        tea_stl,
+        tokens_tea,
+        triangles_tea,
+    )
+
+
+@app.cell
+def __(pos_octant_rule, triangles_tea):
+    pos_octant_rule(triangles_tea)
+    return
+
+
+@app.cell
+def __(normals_tea, orientation_rule, triangles_tea):
+    orientation_rule(triangles_tea, normals_tea)
+    return
+
+
+@app.cell
+def __(shared_edge_rule, triangles_tea):
+    shared_edge_rule(triangles_tea)
+    return
+
+
+@app.cell
+def __(ascending_rule, triangles_tea):
+    ascending_rule(triangles_tea)
+    return
+
+
+@app.cell
+def __(parse, tokenize):
+    with open("data/cube.stl", mode="rt", encoding="us-ascii") as cube_file:
+        cube_stl = cube_file.read()
+    tokens_cube = tokenize(cube_stl)
+    triangles_cube, normals_cube, name_cube = parse(tokens_cube)
+    return (
+        cube_file,
+        cube_stl,
+        name_cube,
+        normals_cube,
+        tokens_cube,
+        triangles_cube,
+    )
+
+
+@app.cell
+def __(pos_octant_rule, triangles_cube):
+    pos_octant_rule(triangles_cube)
+    return
+
+
+@app.cell
+def __(normals_cube, orientation_rule, triangles_cube):
+    orientation_rule(triangles_cube, normals_cube)
+    return
+
+
+@app.cell
+def __(shared_edge_rule, triangles_cube):
+    shared_edge_rule(triangles_cube)
+    return
+
+
+@app.cell
+def __(ascending_rule, triangles_cube):
+    ascending_rule(triangles_cube)
+    return
+
+
+@app.cell(hide_code=True)
+def __(mo):
+    mo.md(r"""On voit que le fichier cube ne vérifie pas les règles suivantes : **positive octant** et **ascending**. On va donc devoir le modifier pour qu'il les vérifie.""")
+    return
+
+
+@app.cell(hide_code=True)
+def __(mo):
+    mo.md(r"""Pour la *positive octant rule*, on va regarder le sommet aux coordonnées "les plus négatives" et appliquer une translation d'ensemble pour avoir toutes les coordonnées positives.""")
+    return
+
+
+@app.cell
+def __(np):
+    def get_positive_octant(triangles):
+        min_coords = np.min(triangles, axis=(0, 1)) #on trouve le triangle de coordonnées minimales
+        translation = -np.min(min_coords, 0)
+        new_triangles = triangles + translation
+        return new_triangles
+    return (get_positive_octant,)
+
+
+@app.cell(hide_code=True)
+def __(mo):
+    mo.md(r"""Pour la *ascending rule*, on calcule les barycentres des triangles et on les range par z croissant.""")
+    return
+
+
+@app.cell
+def __(np):
+    def get_ascending(triangles):
+        barycentres = np.mean(triangles, axis=1)
+        sorted_indices = np.argsort(barycentres[:, 2])
+        new_triangles = triangles[sorted_indices]
+        return new_triangles
+    return (get_ascending,)
+
+
+@app.cell
+def __(
+    get_ascending,
+    get_positive_octant,
+    make_STL,
+    mo,
+    show,
+    triangles_cube,
+):
+    #Nouveau cube respectant toutes les règles
+    new_triangles = get_ascending(get_positive_octant(triangles_cube))
+    stl_cube_corr = make_STL(new_triangles, name="corrected_cube")
+    with open('data/corrected_cube.stl', mode='w', encoding='us-ascii') as stl_file:
+        stl_file.write(stl_cube_corr)
+
+    mo.show_code(show("data/corrected_cube.stl"))
+    return new_triangles, stl_cube_corr, stl_file
+
+
+@app.cell
+def __(new_triangles, pos_octant_rule):
+    pos_octant_rule(new_triangles)
+    return
+
+
+@app.cell
+def __(ascending_rule, new_triangles):
+    ascending_rule(new_triangles)
+    return
+
+
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(
     rf"""
@@ -327,7 +654,7 @@ def __(mo, show):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(
         """
@@ -339,6 +666,37 @@ def __(mo):
 
 
 @app.cell
+def __(make_STL, np):
+    def OBJ_to_STL(obj_path, stl_path):
+        vertices = []
+        triangles = []
+        with open(obj_path, 'r') as obj_file:
+            for line in obj_file:
+                parts = line.split()
+                if not parts:
+                    continue
+                if parts[0] == 'v':  #the line is a vertex
+                    vertices.append(list(map(float, parts[1:4])))
+                elif parts[0] == 'f':  #the line is a face
+                    face = [int(idx.split('/')[0]) - 1 for idx in parts[1:4]] #conversion car la liste des vertices d'une face commence à 1 et pas à 0
+                    triangle = [vertices[face[0]], vertices[face[1]], vertices[face[2]]]
+                    triangles.append(triangle)
+
+        triangles = np.array(triangles, dtype=np.float32)
+        stl_description = make_STL(triangles, name='obj_to_stl')
+        with open(stl_path, 'w') as stl_file:
+            stl_file.write(stl_description)
+    return (OBJ_to_STL,)
+
+
+@app.cell
+def __(OBJ_to_STL, mo, show):
+    OBJ_to_STL('data/bunny.obj', 'data/bunny.stl')
+    mo.show_code(show("data/bunny.stl"))
+    return
+
+
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(
         rf"""
@@ -371,22 +729,22 @@ def __(mo, show):
 @app.cell
 def __(make_STL, np):
     def STL_binary_to_text(stl_filename_in, stl_filename_out):
-        with open(stl_filename_in, mode="rb") as file:
-            _ = file.read(80)
-            n = np.fromfile(file, dtype=np.uint32, count=1)[0]
+        with open(stl_filename_in, mode="rb") as file: #'rb' = lecture binaire
+            _ = file.read(80) #on lit l'en-tête du fichier
+            n = np.fromfile(file, dtype=np.uint32, count=1)[0] #nombre de triangles
             normals = []
             faces = []
             for i in range(n):
-                normals.append(np.fromfile(file, dtype=np.float32, count=3))
-                faces.append(np.fromfile(file, dtype=np.float32, count=9).reshape(3, 3))
-                _ = file.read(2)
+                normals.append(np.fromfile(file, dtype=np.float32, count=3)) #extraction de la normale (12 octets, soit 3 floats)
+                faces.append(np.fromfile(file, dtype=np.float32, count=9).reshape(3, 3)) #extraction des coordonnées des sommets (36 octets, soit 9 floats)
+                _ = file.read(2) #on ignore les octets d'attributs
         stl_text = make_STL(faces, normals)
         with open(stl_filename_out, mode="wt", encoding="utf-8") as file:
             file.write(stl_text)
     return (STL_binary_to_text,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(rf"""## Constructive Solid Geometry (CSG)
 
@@ -405,7 +763,7 @@ def __(X, Y, Z, box, cylinder, mo, show, sphere):
     return (demo_csg,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(mo):
     mo.md("""ℹ️ **Remark.** The same result can be achieved in a more procedural style, with:""")
     return
@@ -439,7 +797,7 @@ def __(
     return (demo_csg_alt,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def __(mo):
     mo.md(
         rf"""
@@ -458,6 +816,103 @@ def __(mo):
 
         """
     )
+    return
+
+
+@app.cell(hide_code=True)
+def __(mo):
+    mo.md(r"""Pour créer la fonction voulue, on doit d'abord rendre compte du fichier JCAD avec des objets de la librairie sdf. Ensuite, il faut pouvoir recréer l'objet avec sdf puis le convertir en STL.""")
+    return
+
+
+@app.cell
+def __():
+    with open('data/demo_jcad.jcad', mode='r') as f:
+        lines = f.read()
+    lines
+    return f, lines
+
+
+@app.cell
+def __(json, np, sdf):
+    def parse_jcad_sdf(fichier):
+        with open(fichier, mode='r') as f:
+            lines = json.load(f)
+        shapes = {}
+        res = 0
+        for item in lines.get("objects"):
+            shape_type = item.get("shape")
+            if shape_type == "Part::Sphere":
+                name = item.get("name")
+                parameters = item.get("parameters")
+                radius = parameters.get("Radius")
+                shapes[name] = sdf.sphere(radius)
+                shapes[res] = sdf.sphere(radius)
+                res += 1
+            elif shape_type == "Part::Box":
+                name = item.get("name")
+                parameters = item.get("parameters")
+                dimensions = [parameters.get("Length"), parameters.get("Width"), parameters.get("Height")]
+                shapes[name] = sdf.box(dimensions)
+                shapes[res] = sdf.box(dimensions)
+                res += 1
+            elif shape_type == "Part::MultiCommon":
+                name = item.get("name")
+                param = item.get("dependencies")
+                shapes[name] = sdf.intersection(shapes[param[0]], shapes[param[1]])
+                shapes[res] = sdf.intersection(shapes[param[0]], shapes[param[1]])
+                res += 1
+            elif shape_type == "Part::Cylinder":
+                name = item.get("name")
+                parameters = item.get("parameters")
+                height = parameters.get("Height")
+                radius = parameters.get("Radius")
+                cyl = sdf.cylinder(radius)
+                placement = parameters.get("Placement")
+                angle = placement.get("Angle")*(180/np.pi) #angle en radian pour sdf
+                axis = placement.get("Axis")
+                shapes[name] = sdf.rotate(cyl, angle, axis)
+                shapes[res] = sdf.rotate(cyl, angle, axis)
+                res += 1
+            elif shape_type == "Part::Cut":
+                name = item.get("name")
+                param = item.get("dependencies")
+                shapes[name] = sdf.difference(shapes[param[0]], shapes[param[1]])
+                shapes[res] = sdf.difference(shapes[param[0]], shapes[param[1]])
+                res += 1
+        return shapes[res-1]
+    return (parse_jcad_sdf,)
+
+
+@app.cell
+def __(parse_jcad_sdf):
+    obj = parse_jcad_sdf('data/demo_jcad.jcad')
+    return (obj,)
+
+
+@app.cell(hide_code=True)
+def __(mo):
+    mo.md(r"""À ce stade, la fonction **parse_jcad_sdf** nous permettrait de récupérer le dernier objet SDF rentré dans le dictionnaire (objet final, donc) grâce à la variable itérante *res*. Reste à convertir cet objet SDF en STL.""")
+    return
+
+
+@app.cell
+def __(obj):
+    obj.save('data/demo_jcad.stl')
+    return
+
+
+@app.cell
+def __():
+    with open("data/demo_jcad.stl", mode="rt") as _file:
+        demo_stl = _file.read()
+    demo_stl
+    return (demo_stl,)
+
+
+@app.cell(hide_code=True)
+def __(mo):
+    mo.md(r"""*Je m'arrête ici pour ne pas y laisser ma santé mentale...*""")
     return
 
 
